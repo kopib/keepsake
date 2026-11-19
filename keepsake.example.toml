@@ -1,0 +1,104 @@
+# ==============================================================================
+# keepsake — Example Project Configuration
+# Copy this file to `keepsake.toml`, edit paths/settings, and run:
+#   uv run keepsake --config keepsake.toml run
+# ==============================================================================
+
+[project]
+# Relative paths resolve against this config file's directory.
+photos_dir   = "./inputs/photos"                  # Folder with source photos (recursive by default)
+target_image = "./inputs/portrait.jpg"            # Target portrait image used to build the mosaic
+out_dir      = "./output"                         # Directory for manifest, mosaic, audio preview, and video
+manifest     = "./output/manifest.json"           # Optional explicit manifest path (defaults to <out_dir>/manifest.json)
+# mosaic_image = "./output/mosaic.jpg"            # Optional explicit mosaic path (auto-detected from <out_dir>/mosaic.jpg)
+# audio_dir    = "./inputs/audio"                 # Folder of audio files (.mp3/.m4a/.wav/.flac), sorted alphabetically
+audio_tracks = [                                  # Explicit audio file list (supports "track.mp3@MM:SS-MM:SS" shorthand)
+  # "./inputs/audio/track1.mp3",
+  # "./inputs/audio/track2.mp3@01:40-02:20",
+]
+
+# Optional per-song climax slices (overrides matching filenames in `audio_dir`, or defines full playlist alone):
+# [[project.audio_clips]]
+# path  = "track1.mp3"                            # Filename inside `audio_dir`, or full/relative path
+# start = "01:40"                                 # Slice start ("MM:SS", "HH:MM:SS", or float seconds)
+# end   = "02:20"                                 # Slice end ("MM:SS", "HH:MM:SS", or float seconds)
+# full  = false                                   # Set true to force full song even when `auto_climax = true`
+
+[ingest]
+# extensions = [".jpg", ".jpeg", ".heic", ...]    # Supported image extensions (defaults cover JPG/PNG/WEBP/TIFF/HEIC/RAW)
+# camera_time_offsets_hours = { "canon" = -6.0 }  # Fix DSLR clock/timezone drift by camera make/model substring
+dedup_hash_distance = 6                           # Max 64-bit dhash Hamming distance to group burst duplicates (-1 disables)
+min_sharpness       = 15.0                        # Minimum Laplacian focus variance to keep a photo (0.0 disables)
+max_video_photos    = 75                          # Base video photo budget (auto-expanded if `dynamic_fill_from_curated = true`)
+recursive           = true                        # Scan subfolders inside `photos_dir`
+scan_workers        = 0                           # Parallel scan threads (0 = auto up to 8; 1 = sequential)
+
+[trips]
+max_gap_hours          = 48.0                     # Start a new trip chapter when time gap exceeds this many hours
+max_distance_km        = 80.0                     # Start a new trip chapter when GPS jump exceeds this many km
+geocode                = true                     # Reverse-geocode trip centroids via OpenStreetMap Nominatim
+geocode_cache_path     = ".cache/geocode.json"    # Local JSON cache file for reverse-geocoded place names
+default_chapter_prefix = "Chapter"                # Fallback chapter title prefix when GPS/geocoding is unavailable
+
+[video]
+# --- Resolution & Encoding ---
+resolution                = "4K"                  # Preset: "4K", "1080P", or "720P" (use "720P" + "ultrafast" for previews)
+# width                   = 3840                  # Optional custom output width in pixels (overrides `resolution`)
+# height                  = 2160                  # Optional custom output height in pixels (overrides `resolution`)
+fps                       = 30                    # Output video frames per second
+codec                     = "libx264"             # Video codec: "libx264" (best compatibility) or "libx265"
+crf                       = 18                    # Quality factor (lower = higher quality; 18 = near-lossless, 26 = fast preview)
+preset                    = "medium"              # x264/x265 speed preset ("ultrafast", "fast", "medium", "slow")
+batch_size                = 8                     # Number of crossfaded segments merged per ffmpeg xfade pass
+
+# --- Pacing & Rhythm ---
+target_duration_sec       = 360.0                 # Fallback duration in seconds (overridden automatically when audio is set)
+# seconds_per_photo       = 3.0                   # Optional fixed duration per photo (forces uniform pacing if set)
+pacing_mode               = "dynamic"             # "dynamic" (music + context variable pacing) or "uniform"
+target_avg_clip_sec       = 0.85                  # Target average clip length in dynamic mode (lower = more photos, faster cuts)
+min_clip_sec              = 0.20                  # Shortest rapid beat/burst flash duration in seconds
+max_clip_sec              = 2.40                  # Longest hero hold duration in seconds
+dynamic_fill_from_curated = true                  # Pull additional curated photos/bursts when soundtrack needs more cuts
+beat_sync                 = true                  # Snap clip cut boundaries to detected audio beats/onsets
+
+# --- Framing, Motion & Transitions ---
+portrait_mode             = "blurred_bg"          # Portrait photo handling: "blurred_bg", "pad", or "crop"
+camera_motion             = "zoom"                # "zoom" (calm centered zoom), "subtle_pan" (gentle landscape drift), or "none"
+motion_sync               = true                  # Scale centered zoom depth & beat-punch subtly with audio energy
+zoom_strength             = 0.07                  # Base Ken Burns zoom depth (0.05 = gentle, 0.08 = noticeable)
+transition_sec            = 0.8                   # Crossfade duration in seconds between slower clips (fast cuts stay hard cuts)
+
+# --- Title Cards, Quote & Mosaic Finale ---
+include_title_cards       = true                  # Master switch to enable/disable section title cards
+title_card_mode           = "year"                # "year" ("Year 2021", ...), "chapter" (trip titles), or "none"
+year_card_prefix          = "Year "               # Prefix for year cards (set "" for plain "2021")
+title_card_sec            = 2.4                   # Display duration per title card in seconds
+# closing_quote           = "your quote here"     # Optional closing quote card shown right before the mosaic finale
+closing_quote_sec         = 3.5                   # Display duration of the closing quote card in seconds
+mosaic_finale_sec         = 12.0                  # Duration of the finale mosaic animation in seconds (0 disables finale)
+mosaic_finale_style       = "puzzle"              # "puzzle" (live tile assembly) or "zoom" (zoom-out reveal from focal tile)
+mosaic_puzzle_pattern     = "fly_in"              # Puzzle assembly style: "fly_in", "center_out", or "spiral"
+mosaic_focal_x            = 0.5                   # Normalized horizontal focal point (0.0-1.0) for zoom/center_out finale
+mosaic_focal_y            = 0.5                   # Normalized vertical focal point (0.0-1.0) for zoom/center_out finale
+
+# --- Audio Mixing & Climax Slicing ---
+audio_fade_in_sec         = 1.0                   # Fade-in duration at the start of the soundtrack in seconds
+audio_fade_out_sec        = 3.0                   # Fade-out duration at the end of the video in seconds
+audio_crossfade_sec       = 2.0                   # Crossfade overlap duration between consecutive tracks in seconds
+audio_normalize           = true                  # Apply EBU R128 loudness normalization (`loudnorm`) across tracks
+auto_climax               = false                 # Auto-detect highest-energy climax slice when start/end are omitted
+climax_duration_sec       = 40.0                  # Length in seconds of each auto-detected climax slice
+
+[mosaic]
+paper_size    = "A4"                              # Print preset: "A4", "A3", "A2", "30x40", or "50x70"
+# width_cm    = 21.0                              # Optional custom print width in cm (overrides `paper_size`)
+# height_cm   = 29.7                              # Optional custom print height in cm (overrides `paper_size`)
+dpi           = 300                               # Print resolution in dots per inch (A4 @ 300 DPI = 2480x3508 px)
+cols          = 52                                # Number of mosaic tile columns across the width (higher = finer detail)
+subgrid       = 3                                 # Sub-patch grid per tile for CIE Lab color matching (3 = 3x3 patches)
+max_reuse     = 14                                # Maximum times any single photo tile can be repeated
+min_distance  = 2                                 # Minimum grid-cell spacing between two placements of the same photo
+overlay_alpha = 0.14                              # Subtle target portrait blend (0.0 = pure tiles, 0.12-0.22 = crisp face)
+auto_orient   = true                              # Automatically match paper portrait/landscape orientation to `target_image`
+crop_mode     = "center"                          # Tile crop strategy ("center" or "fit")
+seed          = 42                                # Random seed for reproducible center-outward tile placement jitter

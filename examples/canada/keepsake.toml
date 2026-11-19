@@ -1,0 +1,50 @@
+# Minimal runnable Canada landscape demo for keepsake.
+# Fetch CC0/Public Domain assets first:
+#   uv run python examples/canada/fetch_demo.py
+# Then run the full pipeline:
+#   uv run keepsake --config examples/canada/keepsake.toml run
+
+[project]
+photos_dir   = "./inputs/photos"
+target_image = "./inputs/target.jpg"
+out_dir      = "./output"
+audio_dir    = "./inputs/audio"
+
+[ingest]
+min_sharpness       = 5.0
+dedup_hash_distance = 5
+max_video_photos    = 24
+
+[mosaic]
+paper_size    = "A4"
+dpi           = 150
+cols          = 46
+max_reuse     = 45
+min_distance  = 2
+overlay_alpha = 0.24
+auto_orient   = true
+
+[video]
+resolution                = "720P"
+fps                       = 24
+preset                    = "ultrafast"
+crf                       = 22
+pacing_mode               = "dynamic"
+target_avg_clip_sec       = 0.65
+min_clip_sec              = 0.20
+max_clip_sec              = 1.60
+dynamic_fill_from_curated = false
+camera_motion             = "zoom"
+motion_sync               = true
+zoom_strength             = 0.06
+transition_sec            = 0.5
+include_title_cards       = false
+closing_quote             = "made with keepsake"
+closing_quote_sec         = 2.5
+mosaic_finale_sec         = 7.0
+mosaic_finale_style       = "puzzle"
+mosaic_puzzle_pattern     = "fly_in"
+auto_climax               = true
+climax_duration_sec       = 22.0
+audio_fade_in_sec         = 0.8
+audio_fade_out_sec        = 2.0

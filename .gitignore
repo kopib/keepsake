@@ -1,0 +1,10 @@
+/keepsake.toml
+inputs
+output
+outputs
+examples/*/inputs
+examples/*/output
+.cache
+.venv
+.pytest_cache
+__pycache__

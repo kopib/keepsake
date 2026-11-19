@@ -1,0 +1,49 @@
+[project]
+name = "keepsake"
+version = "0.1.0"
+description = "Reusable photo curation, trip clustering, Ken Burns video, and print-ready mosaic toolkit"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "kopib" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.4",
+    "pillow>=13.0.0",
+    "pillow-heif>=1.8.1",
+    "scipy>=1.18.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/kopib/keepsake"
+Repository = "https://github.com/kopib/keepsake"
+Issues = "https://github.com/kopib/keepsake/issues"
+
+[project.optional-dependencies]
+raw = [
+    "rawpy>=0.24.0",
+]
+
+[project.scripts]
+keepsake = "keepsake.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
