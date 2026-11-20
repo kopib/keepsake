@@ -1000,6 +1000,7 @@ def test_example_toml_parses_cleanly_without_warnings() -> None:
     assert caught == []
     assert cfg.video.title_card_mode == "year"
     assert cfg.video.mosaic_finale_style == "puzzle"
+    assert cfg.video.render_workers == 0
 
 
 def test_logger_colors_levels_and_no_duplicates() -> None:
@@ -1029,3 +1030,64 @@ def test_logger_colors_levels_and_no_duplicates() -> None:
     assert "suppressed info" not in plain
     assert "visible warning" in plain
     assert "\033[" not in plain
+
+
+def test_parallel_video_render_and_progress_logging(tmp_path: Path) -> None:
+    import io
+
+    photos_dir = tmp_path / "photos"
+    photos_dir.mkdir()
+    for idx in range(4):
+        exif = _build_exif(dt_str=f"2024:06:0{idx + 1} 12:00:00")
+        _make_textured_image(
+            photos_dir / f"p_{idx:02d}.jpg",
+            base_rgb=(60 + idx * 45, 130, 200 - idx * 30),
+            exif_bytes=exif,
+        )
+
+    manifest = scan_photos(photos_dir, IngestConfig(min_sharpness=0.0, dedup_hash_distance=-1))
+    cluster_trips(manifest, TripConfig(max_gap_hours=72.0))
+
+    common = dict(
+        resolution="720P",
+        fps=12,
+        seconds_per_photo=1.0,
+        transition_sec=0.3,
+        include_title_cards=True,
+        title_card_mode="year",
+        title_card_sec=1.0,
+        closing_quote="a brief closing line",
+        closing_quote_sec=1.0,
+        mosaic_finale_sec=0.0,
+        preset="ultrafast",
+        crf=28,
+    )
+
+    seq_out = tmp_path / "seq.mp4"
+    res_seq = render_keepsake_video(
+        manifest,
+        seq_out,
+        config=VideoConfig(**common, render_workers=1),
+    )
+
+    log_buf = io.StringIO()
+    configure_logging(stream=log_buf, force_color=False)
+    par_out = tmp_path / "par.mp4"
+    res_par = render_keepsake_video(
+        manifest,
+        par_out,
+        config=VideoConfig(**common, render_workers=2),
+    )
+
+    assert seq_out.exists()
+    assert par_out.exists()
+    assert res_par.photo_count == res_seq.photo_count == 4
+    assert res_par.chapter_count == res_seq.chapter_count == 1
+    assert abs(probe_media_duration(par_out) - probe_media_duration(seq_out)) <= 0.15
+
+    logs = log_buf.getvalue()
+    assert "Rendering 6 clip(s)" in logs
+    assert "(2 worker(s))" in logs
+    assert "Rendered 6/6 clips (100%)" in logs
+    assert "Joining 6 rendered clip(s)..." in logs
+    assert "Finalizing faststart MP4..." in logs

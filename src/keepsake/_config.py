@@ -115,6 +115,7 @@ class VideoConfig:
     climax_duration_sec: float = 40.0
     zoom_strength: float = 0.08
     batch_size: int = 8
+    render_workers: int = 0  # 0 = auto parallel clip workers (up to 4); 1 = sequential
 
     def resolved_dimensions(self) -> tuple[int, int]:
         if self.width is not None and self.height is not None:

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,7 +25,7 @@ from keepsake._audio import (
     resolve_audio_segments,
 )
 from keepsake._config import VideoConfig
-from keepsake._image_io import open_image
+from keepsake._image_io import ensure_heif_support, open_image
 from keepsake._logging import get_logger
 from keepsake._models import Manifest, PhotoRecord, TripChapter
 from keepsake._mosaic import render_mosaic_puzzle_finale, render_mosaic_zoom_reveal
@@ -38,6 +41,18 @@ class ClipSpec:
     path: Path
     duration_sec: float
     transition_after_sec: float = 0.0
+
+
+@dataclass(slots=True)
+class _RenderJob:
+    """Independent clip encoding task for sequential or parallel execution."""
+
+    slot_idx: int
+    kind: str
+    title: str = ""
+    subtitle: str = ""
+    photo_idx: int = 0
+    item: PlannedClip | None = None
 
 
 @dataclass(slots=True)
@@ -114,6 +129,7 @@ def render_keepsake_video(
         audio_timeline: AudioTimeline | None = None
 
         if segments:
+            logger.info("Mixing %d audio track(s) and analyzing beats...", len(segments))
             raw_mixed_wav = tmp_dir / "mixed_raw.wav"
             mix_audio_segments(
                 segments,
@@ -167,138 +183,54 @@ def render_keepsake_video(
                 has_quote=has_quote,
                 has_finale=has_finale,
             )
-        clips: list[ClipSpec] = []
-        photo_idx = 0
 
+        jobs: list[_RenderJob] = []
+        photo_idx = 0
         for card_title, card_sub, section_items in sections:
             if card_title:
-                card_img = tmp_dir / f"card_{len(clips):04d}.png"
-                render_title_card_image(
-                    card_title,
-                    card_sub,
-                    card_img,
-                    width=width,
-                    height=height,
-                )
-                card_clip = tmp_dir / f"clip_{len(clips):04d}.mp4"
-                actual_card_dur = _render_still_clip(
-                    card_img,
-                    card_clip,
-                    width=width,
-                    height=height,
-                    duration_sec=cfg.title_card_sec,
-                    fps=cfg.fps,
-                    codec=cfg.codec,
-                    crf=cfg.crf,
-                    preset=cfg.preset,
-                )
-                clips.append(
-                    ClipSpec(
-                        card_clip,
-                        actual_card_dur,
-                        min(cfg.transition_sec, actual_card_dur * 0.4),
+                jobs.append(
+                    _RenderJob(
+                        slot_idx=len(jobs),
+                        kind="title_card",
+                        title=card_title,
+                        subtitle=card_sub,
                     )
                 )
-
             for item in section_items:
-                composed = tmp_dir / f"frame_{len(clips):04d}.png"
-                compose_photo_frame(
-                    item.photo.path,
-                    composed,
-                    width=width,
-                    height=height,
-                    portrait_mode=cfg.portrait_mode,
+                jobs.append(
+                    _RenderJob(
+                        slot_idx=len(jobs),
+                        kind="photo",
+                        photo_idx=photo_idx,
+                        item=item,
+                    )
                 )
-                clip_path = tmp_dir / f"clip_{len(clips):04d}.mp4"
-                if cfg.camera_motion == "none":
-                    actual_dur = _render_still_clip(
-                        composed,
-                        clip_path,
-                        width=width,
-                        height=height,
-                        duration_sec=item.duration_sec,
-                        fps=cfg.fps,
-                        codec=cfg.codec,
-                        crf=cfg.crf,
-                        preset=cfg.preset,
-                    )
-                elif item.duration_sec < 0.55:
-                    if cfg.motion_sync and item.energy >= 0.45:
-                        actual_dur = _render_beat_punch_clip(
-                            composed,
-                            clip_path,
-                            width=width,
-                            height=height,
-                            duration_sec=item.duration_sec,
-                            fps=cfg.fps,
-                            punch_in=(photo_idx % 2) == 0,
-                            strength=0.025 + 0.025 * item.energy,
-                            codec=cfg.codec,
-                            crf=cfg.crf,
-                            preset=cfg.preset,
-                        )
-                    else:
-                        actual_dur = _render_still_clip(
-                            composed,
-                            clip_path,
-                            width=width,
-                            height=height,
-                            duration_sec=item.duration_sec,
-                            fps=cfg.fps,
-                            codec=cfg.codec,
-                            crf=cfg.crf,
-                            preset=cfg.preset,
-                        )
-                else:
-                    eff_zoom = (
-                        cfg.zoom_strength * (0.55 + 0.65 * item.energy)
-                        if cfg.motion_sync
-                        else cfg.zoom_strength
-                    )
-                    allow_pan = cfg.camera_motion == "subtle_pan" and not item.photo.is_portrait
-                    motion_style = (photo_idx % 5) if allow_pan else (photo_idx % 2)
-                    actual_dur = _render_ken_burns_clip(
-                        composed,
-                        clip_path,
-                        width=width,
-                        height=height,
-                        duration_sec=item.duration_sec,
-                        fps=cfg.fps,
-                        motion_style=motion_style,
-                        zoom_strength=eff_zoom,
-                        codec=cfg.codec,
-                        crf=cfg.crf,
-                        preset=cfg.preset,
-                    )
-                clips.append(ClipSpec(clip_path, actual_dur, item.transition_after_sec))
                 photo_idx += 1
 
         if has_quote and cfg.closing_quote:
-            quote_img = tmp_dir / f"quote_{len(clips):04d}.png"
-            render_quote_card_image(
-                cfg.closing_quote.strip(),
-                quote_img,
-                width=width,
-                height=height,
+            jobs.append(
+                _RenderJob(
+                    slot_idx=len(jobs),
+                    kind="quote",
+                    title=cfg.closing_quote.strip(),
+                )
             )
-            quote_clip = tmp_dir / f"clip_{len(clips):04d}_quote.mp4"
-            actual_quote_dur = _render_ken_burns_clip(
-                quote_img,
-                quote_clip,
-                width=width,
-                height=height,
-                duration_sec=cfg.closing_quote_sec,
-                fps=cfg.fps,
-                motion_style=0,
-                zoom_strength=0.04,
-                codec=cfg.codec,
-                crf=cfg.crf,
-                preset=cfg.preset,
-            )
-            quote_trans = min(cfg.transition_sec, actual_quote_dur * 0.35) if has_finale else 0.0
-            clips.append(ClipSpec(quote_clip, actual_quote_dur, quote_trans))
+
+        clips = _render_clip_jobs(
+            jobs,
+            tmp_dir=tmp_dir,
+            width=width,
+            height=height,
+            cfg=cfg,
+            has_finale=has_finale,
+        )
 
         if has_finale and mosaic_image_path is not None:
+            logger.info(
+                "Rendering %s mosaic finale (%.1fs)...",
+                cfg.mosaic_finale_style,
+                cfg.mosaic_finale_sec,
+            )
             finale_clip = tmp_dir / f"clip_{len(clips):04d}_finale.mp4"
             if cfg.mosaic_finale_style == "puzzle":
                 render_mosaic_puzzle_finale(
@@ -332,6 +264,7 @@ def render_keepsake_video(
                 )
             clips.append(ClipSpec(finale_clip, cfg.mosaic_finale_sec, 0.0))
 
+        logger.info("Joining %d rendered clip(s)...", len(clips))
         merged_video = tmp_dir / "merged_silent.mp4"
         final_dur = _join_clips_hybrid(
             clips,
@@ -344,6 +277,7 @@ def render_keepsake_video(
         )
 
         if raw_mixed_wav is not None:
+            logger.info("Muxing audio and writing faststart MP4...")
             _mux_premixed_audio(
                 merged_video,
                 raw_mixed_wav,
@@ -353,6 +287,7 @@ def render_keepsake_video(
                 codec=cfg.codec,
             )
         else:
+            logger.info("Finalizing faststart MP4...")
             _finalize_silent_mp4(merged_video, out_path, codec=cfg.codec)
 
     return VideoResult(
@@ -569,6 +504,246 @@ def _resolve_pacing_plan(
     )
 
 
+def _resolve_render_workers(configured: int, job_count: int) -> int:
+    if job_count <= 1:
+        return 1
+    if configured > 0:
+        return max(1, min(configured, job_count))
+    auto = min(4, max(1, (os.cpu_count() or 2) // 2))
+    return min(auto, job_count)
+
+
+def _render_clip_jobs(
+    jobs: list[_RenderJob],
+    *,
+    tmp_dir: Path,
+    width: int,
+    height: int,
+    cfg: VideoConfig,
+    has_finale: bool,
+) -> list[ClipSpec]:
+    total = len(jobs)
+    if total == 0:
+        return []
+
+    workers = _resolve_render_workers(cfg.render_workers, total)
+    threads_per_job = max(2, (os.cpu_count() or 4) // workers) if workers > 1 else None
+    logger.info(
+        "Rendering %d clip(s) at %dx%d@%dfps (%d worker(s))...",
+        total,
+        width,
+        height,
+        cfg.fps,
+        workers,
+    )
+
+    t0 = time.monotonic()
+    log_step = max(1, min(25, max(5, total // 5)))
+    results: dict[int, ClipSpec] = {}
+
+    if workers == 1:
+        for done, job in enumerate(jobs, start=1):
+            results[job.slot_idx] = _execute_render_job(
+                job,
+                tmp_dir=tmp_dir,
+                width=width,
+                height=height,
+                cfg=cfg,
+                has_finale=has_finale,
+                threads=threads_per_job,
+            )
+            if done == total or (total >= 10 and done % log_step == 0):
+                logger.info(
+                    "Rendered %d/%d clips (%.0f%%) in %.1fs",
+                    done,
+                    total,
+                    (done / total) * 100.0,
+                    time.monotonic() - t0,
+                )
+    else:
+        ensure_heif_support()
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(
+                    _execute_render_job,
+                    job,
+                    tmp_dir=tmp_dir,
+                    width=width,
+                    height=height,
+                    cfg=cfg,
+                    has_finale=has_finale,
+                    threads=threads_per_job,
+                ): job.slot_idx
+                for job in jobs
+            }
+            for fut in as_completed(futures):
+                slot_idx = futures[fut]
+                results[slot_idx] = fut.result()
+                done += 1
+                if done == total or (total >= 10 and done % log_step == 0):
+                    logger.info(
+                        "Rendered %d/%d clips (%.0f%%) in %.1fs",
+                        done,
+                        total,
+                        (done / total) * 100.0,
+                        time.monotonic() - t0,
+                    )
+
+    return [results[i] for i in range(total)]
+
+
+def _execute_render_job(
+    job: _RenderJob,
+    *,
+    tmp_dir: Path,
+    width: int,
+    height: int,
+    cfg: VideoConfig,
+    has_finale: bool,
+    threads: int | None,
+) -> ClipSpec:
+    if job.kind == "title_card":
+        card_img = tmp_dir / f"card_{job.slot_idx:04d}.png"
+        card_clip = tmp_dir / f"clip_{job.slot_idx:04d}.mp4"
+        try:
+            render_title_card_image(
+                job.title,
+                job.subtitle,
+                card_img,
+                width=width,
+                height=height,
+            )
+            actual_card_dur = _render_still_clip(
+                card_img,
+                card_clip,
+                width=width,
+                height=height,
+                duration_sec=cfg.title_card_sec,
+                fps=cfg.fps,
+                codec=cfg.codec,
+                crf=cfg.crf,
+                preset=cfg.preset,
+                threads=threads,
+            )
+        finally:
+            card_img.unlink(missing_ok=True)
+        return ClipSpec(
+            card_clip,
+            actual_card_dur,
+            min(cfg.transition_sec, actual_card_dur * 0.4),
+        )
+
+    if job.kind == "quote":
+        quote_img = tmp_dir / f"quote_{job.slot_idx:04d}.png"
+        quote_clip = tmp_dir / f"clip_{job.slot_idx:04d}_quote.mp4"
+        try:
+            render_quote_card_image(
+                job.title,
+                quote_img,
+                width=width,
+                height=height,
+            )
+            actual_quote_dur = _render_ken_burns_clip(
+                quote_img,
+                quote_clip,
+                width=width,
+                height=height,
+                duration_sec=cfg.closing_quote_sec,
+                fps=cfg.fps,
+                motion_style=0,
+                zoom_strength=0.04,
+                codec=cfg.codec,
+                crf=cfg.crf,
+                preset=cfg.preset,
+                threads=threads,
+            )
+        finally:
+            quote_img.unlink(missing_ok=True)
+        quote_trans = min(cfg.transition_sec, actual_quote_dur * 0.35) if has_finale else 0.0
+        return ClipSpec(quote_clip, actual_quote_dur, quote_trans)
+
+    assert job.item is not None
+    item = job.item
+    composed = tmp_dir / f"frame_{job.slot_idx:04d}.png"
+    clip_path = tmp_dir / f"clip_{job.slot_idx:04d}.mp4"
+    try:
+        compose_photo_frame(
+            item.photo.path,
+            composed,
+            width=width,
+            height=height,
+            portrait_mode=cfg.portrait_mode,
+        )
+        if cfg.camera_motion == "none":
+            actual_dur = _render_still_clip(
+                composed,
+                clip_path,
+                width=width,
+                height=height,
+                duration_sec=item.duration_sec,
+                fps=cfg.fps,
+                codec=cfg.codec,
+                crf=cfg.crf,
+                preset=cfg.preset,
+                threads=threads,
+            )
+        elif item.duration_sec < 0.55:
+            if cfg.motion_sync and item.energy >= 0.45:
+                actual_dur = _render_beat_punch_clip(
+                    composed,
+                    clip_path,
+                    width=width,
+                    height=height,
+                    duration_sec=item.duration_sec,
+                    fps=cfg.fps,
+                    punch_in=(job.photo_idx % 2) == 0,
+                    strength=0.025 + 0.025 * item.energy,
+                    codec=cfg.codec,
+                    crf=cfg.crf,
+                    preset=cfg.preset,
+                    threads=threads,
+                )
+            else:
+                actual_dur = _render_still_clip(
+                    composed,
+                    clip_path,
+                    width=width,
+                    height=height,
+                    duration_sec=item.duration_sec,
+                    fps=cfg.fps,
+                    codec=cfg.codec,
+                    crf=cfg.crf,
+                    preset=cfg.preset,
+                    threads=threads,
+                )
+        else:
+            eff_zoom = (
+                cfg.zoom_strength * (0.55 + 0.65 * item.energy)
+                if cfg.motion_sync
+                else cfg.zoom_strength
+            )
+            allow_pan = cfg.camera_motion == "subtle_pan" and not item.photo.is_portrait
+            motion_style = (job.photo_idx % 5) if allow_pan else (job.photo_idx % 2)
+            actual_dur = _render_ken_burns_clip(
+                composed,
+                clip_path,
+                width=width,
+                height=height,
+                duration_sec=item.duration_sec,
+                fps=cfg.fps,
+                motion_style=motion_style,
+                zoom_strength=eff_zoom,
+                codec=cfg.codec,
+                crf=cfg.crf,
+                preset=cfg.preset,
+                threads=threads,
+            )
+    finally:
+        composed.unlink(missing_ok=True)
+    return ClipSpec(clip_path, actual_dur, item.transition_after_sec)
+
+
 def _render_still_clip(
     image_path: Path,
     out_path: Path,
@@ -580,6 +755,7 @@ def _render_still_clip(
     codec: str,
     crf: int,
     preset: str,
+    threads: int | None = None,
 ) -> float:
     total_frames = max(2, round(duration_sec * fps))
     actual_dur = total_frames / float(fps)
@@ -604,8 +780,10 @@ def _render_still_clip(
         preset,
         "-video_track_timescale",
         "90000",
-        str(out_path),
     ]
+    if threads is not None:
+        cmd.extend(["-threads", str(threads)])
+    cmd.append(str(out_path))
     _run_ffmpeg(cmd)
     return actual_dur
 
@@ -623,6 +801,7 @@ def _render_beat_punch_clip(
     codec: str,
     crf: int,
     preset: str,
+    threads: int | None = None,
 ) -> float:
     """Fast 1x-scale micro zoom-punch synced to high-energy beat cuts."""
     total_frames = max(2, round(duration_sec * fps))
@@ -659,8 +838,10 @@ def _render_beat_punch_clip(
         preset,
         "-video_track_timescale",
         "90000",
-        str(out_path),
     ]
+    if threads is not None:
+        cmd.extend(["-threads", str(threads)])
+    cmd.append(str(out_path))
     _run_ffmpeg(cmd)
     return actual_dur
 
@@ -678,6 +859,7 @@ def _render_ken_burns_clip(
     codec: str,
     crf: int,
     preset: str,
+    threads: int | None = None,
 ) -> float:
     total_frames = max(2, round(duration_sec * fps))
     actual_dur = total_frames / float(fps)
@@ -735,8 +917,10 @@ def _render_ken_burns_clip(
         preset,
         "-video_track_timescale",
         "90000",
-        str(out_path),
     ]
+    if threads is not None:
+        cmd.extend(["-threads", str(threads)])
+    cmd.append(str(out_path))
     _run_ffmpeg(cmd)
     return actual_dur
 

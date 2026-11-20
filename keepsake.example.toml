@@ -50,6 +50,7 @@ codec                     = "libx264"             # Video codec: "libx264" (best
 crf                       = 18                    # Quality factor (lower = higher quality; 18 = near-lossless, 26 = fast preview)
 preset                    = "medium"              # x264/x265 speed preset ("ultrafast", "fast", "medium", "slow")
 batch_size                = 8                     # Number of crossfaded segments merged per ffmpeg xfade pass
+render_workers            = 0                     # Parallel clip render workers (0 = auto up to 4; 1 = sequential)
 
 # --- Pacing & Rhythm ---
 target_duration_sec       = 360.0                 # Fallback duration in seconds (overridden automatically when audio is set)
