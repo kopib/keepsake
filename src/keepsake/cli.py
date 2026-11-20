@@ -97,6 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_mos.add_argument("--dpi", type=int, default=None, help="Output DPI (default: 300).")
     p_mos.add_argument("--cols", type=int, default=None, help="Tile columns across width.")
+    p_mos.add_argument(
+        "--color-correction",
+        type=float,
+        default=None,
+        help="Per-tile CIE Lab color/luminance matching strength (0.0-1.0).",
+    )
     p_mos.add_argument("--overlay-alpha", type=float, default=None, help="Target blend (0.0-1.0).")
 
     # video
@@ -585,6 +591,8 @@ def _override_mosaic_config(base: MosaicConfig, args: argparse.Namespace) -> Mos
         base.dpi = args.dpi
     if args.cols is not None:
         base.cols = args.cols
+    if args.color_correction is not None:
+        base.color_correction = args.color_correction
     if args.overlay_alpha is not None:
         base.overlay_alpha = args.overlay_alpha
     return base

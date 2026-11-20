@@ -86,6 +86,17 @@ def build_mosaic(
         r, c = divmod(cell_idx, cols)
         mosaic_img.paste(tiles_rgb[tile_idx], (c * tile_w, r * tile_h))
 
+    if cfg.color_correction > 0.0:
+        mosaic_img = _apply_tile_color_correction(
+            mosaic_img,
+            target_fitted,
+            cols=cols,
+            rows=rows,
+            tile_w=tile_w,
+            tile_h=tile_h,
+            strength=min(1.0, cfg.color_correction),
+        )
+
     if 0.0 < cfg.overlay_alpha <= 1.0:
         mosaic_img = Image.blend(mosaic_img, target_fitted, alpha=cfg.overlay_alpha)
 
@@ -528,6 +539,80 @@ def _srgb_to_lab(rgb: np.ndarray) -> np.ndarray:
     a = 500.0 * (f[..., 0] - f[..., 1])
     b = 200.0 * (f[..., 1] - f[..., 2])
     return np.stack([L, a, b], axis=-1)
+
+
+def _lab_to_srgb(lab: np.ndarray) -> np.ndarray:
+    """Convert perceptual CIE Lab array (..., 3) back to normalized sRGB [0, 1]."""
+    fy = (lab[..., 0] + 16.0) / 116.0
+    fx = fy + lab[..., 1] / 500.0
+    fz = fy - lab[..., 2] / 200.0
+
+    kappa = 24389.0 / 27.0
+    delta = 6.0 / 29.0
+    x = np.where(fx > delta, fx**3, (116.0 * fx - 16.0) / kappa)
+    y = np.where(fy > delta, fy**3, (116.0 * fy - 16.0) / kappa)
+    z = np.where(fz > delta, fz**3, (116.0 * fz - 16.0) / kappa)
+
+    xyz = np.stack([x * 0.95047, y, z * 1.08883], axis=-1)
+    m_inv = np.array(
+        [
+            [3.2404542, -1.5371385, -0.4985314],
+            [-0.9692660, 1.8760108, 0.0415560],
+            [0.0556434, -0.2040259, 1.0572252],
+        ],
+        dtype=np.float32,
+    )
+    linear = np.clip(xyz @ m_inv.T, 0.0, 1.0)
+    return np.where(
+        linear <= 0.0031308,
+        linear * 12.92,
+        1.055 * (linear ** (1.0 / 2.4)) - 0.055,
+    )
+
+
+def _apply_tile_color_correction(
+    mosaic: Image.Image,
+    target: Image.Image,
+    *,
+    cols: int,
+    rows: int,
+    tile_w: int,
+    tile_h: int,
+    strength: float,
+) -> Image.Image:
+    """Nudge each tile's CIE Lab luminance & chroma mean toward its target cell.
+
+    Processes one tile-row strip at a time to keep memory usage low even on
+    large 300 DPI print canvases while preserving each photo's crisp local
+    contrast and details.
+    """
+    strength = min(1.0, max(0.0, strength))
+    if strength <= 0.0:
+        return mosaic
+
+    mosaic_arr = np.asarray(mosaic, dtype=np.uint8)
+    target_arr = np.asarray(target, dtype=np.uint8)
+    out_arr = np.empty_like(mosaic_arr)
+    grid_w = cols * tile_w
+
+    for r in range(rows):
+        y0, y1 = r * tile_h, (r + 1) * tile_h
+        tile_lab = _srgb_to_lab(mosaic_arr[y0:y1].astype(np.float32) / 255.0).reshape(
+            tile_h, cols, tile_w, 3
+        )
+        target_lab = _srgb_to_lab(target_arr[y0:y1].astype(np.float32) / 255.0).reshape(
+            tile_h, cols, tile_w, 3
+        )
+        delta = (
+            target_lab.mean(axis=(0, 2), keepdims=True) - tile_lab.mean(axis=(0, 2), keepdims=True)
+        ) * strength
+        corrected_lab = tile_lab + delta
+        corrected_lab[..., 0] = np.clip(corrected_lab[..., 0], 0.0, 100.0)
+        corrected_rgb = _lab_to_srgb(corrected_lab.reshape(tile_h, grid_w, 3))
+        out_arr[y0:y1] = np.clip(corrected_rgb * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
+
+    logger.debug("Applied per-tile CIE Lab color correction (strength=%.2f)", strength)
+    return Image.fromarray(out_arr, mode="RGB")
 
 
 def _assign_tiles(

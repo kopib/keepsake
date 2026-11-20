@@ -141,6 +141,7 @@ class MosaicConfig:
     subgrid: int = 3
     max_reuse: int = 8
     min_distance: int = 3
+    color_correction: float = 0.25
     overlay_alpha: float = 0.14
     auto_orient: bool = True
     crop_mode: Literal["center", "fit"] = "center"

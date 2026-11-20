@@ -1001,6 +1001,7 @@ def test_example_toml_parses_cleanly_without_warnings() -> None:
     assert cfg.video.title_card_mode == "year"
     assert cfg.video.mosaic_finale_style == "puzzle"
     assert cfg.video.render_workers == 0
+    assert cfg.mosaic.color_correction == 0.25
 
 
 def test_logger_colors_levels_and_no_duplicates() -> None:
@@ -1091,3 +1092,80 @@ def test_parallel_video_render_and_progress_logging(tmp_path: Path) -> None:
     assert "Rendered 6/6 clips (100%)" in logs
     assert "Joining 6 rendered clip(s)..." in logs
     assert "Finalizing faststart MP4..." in logs
+
+
+def test_mosaic_lab_roundtrip_and_tile_color_correction(tmp_path: Path) -> None:
+    from PIL import ImageOps
+
+    from keepsake._mosaic import _lab_to_srgb, _srgb_to_lab
+
+    # 1. Exact CIE Lab <-> sRGB round-trip check across edges and random samples
+    rng = np.random.default_rng(7)
+    samples = np.vstack(
+        [
+            np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 1.0, 1.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float32,
+            ),
+            rng.uniform(0.0, 1.0, size=(200, 3)).astype(np.float32),
+        ]
+    )
+    recovered = _lab_to_srgb(_srgb_to_lab(samples))
+    assert float(np.max(np.abs(samples - recovered))) < 1e-3
+
+    # 2. Per-tile color correction monotonically improves target fidelity while keeping tile detail
+    target_path = tmp_path / "target.png"
+    target_arr = np.zeros((240, 180, 3), dtype=np.uint8)
+    target_arr[:120, :, :] = [210, 80, 60]  # warm coral top half
+    target_arr[120:, :, :] = [40, 110, 200]  # cool blue bottom half
+    Image.fromarray(target_arr, mode="RGB").save(target_path)
+
+    # Deliberately neutral/greenish textured tiles so color_correction must bridge the gap
+    tile_paths: list[Path] = []
+    for idx in range(4):
+        p = tmp_path / f"tile_{idx}.png"
+        _make_textured_image(
+            p,
+            size=(160, 160),
+            base_rgb=(110 + idx * 10, 145, 115 + idx * 8),
+        )
+        tile_paths.append(p)
+
+    errors: dict[float, float] = {}
+    stds: dict[float, float] = {}
+    for strength in (0.0, 0.3, 0.8):
+        out = tmp_path / f"mosaic_{strength:.1f}.png"
+        res = build_mosaic(
+            target_path,
+            tile_paths,
+            out,
+            config=MosaicConfig(
+                paper_size="A4",
+                dpi=72,
+                cols=8,
+                max_reuse=40,
+                min_distance=0,
+                color_correction=strength,
+                overlay_alpha=0.0,
+            ),
+        )
+        with Image.open(out) as m_img, Image.open(target_path) as t_img:
+            m_arr = np.asarray(m_img.convert("RGB"), dtype=np.float32)
+            t_fit = ImageOps.fit(
+                t_img.convert("RGB"),
+                (res.width_px, res.height_px),
+                method=Image.Resampling.LANCZOS,
+            )
+            t_arr = np.asarray(t_fit, dtype=np.float32)
+            errors[strength] = float(np.mean(np.abs(m_arr - t_arr)))
+            # Local detail inside the first tile cell should remain crisp
+            stds[strength] = float(np.std(m_arr[: res.tile_height_px, : res.tile_width_px]))
+
+    assert errors[0.8] < errors[0.3] < errors[0.0]
+    assert stds[0.3] >= stds[0.0] * 0.75
