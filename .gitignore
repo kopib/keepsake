@@ -5,6 +5,7 @@ outputs
 examples/*/inputs
 examples/*/output
 .cache
+dist
 .venv
 .pytest_cache
 __pycache__

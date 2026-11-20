@@ -4,6 +4,7 @@
   <p><strong>Turn years of photos and favorite songs into a beat-synced 4K keepsake video and a print-ready photomosaic portrait.</strong></p>
 
   <p>
+    <a href="https://github.com/kopib/keepsake/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/kopib/keepsake/ci.yml?branch=main&style=flat-square&label=CI&logo=githubactions&logoColor=white" alt="CI" /></a>
     <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" /></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="MIT License" /></a>
     <a href="https://docs.astral.sh/ruff/"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square" alt="Ruff" /></a>
